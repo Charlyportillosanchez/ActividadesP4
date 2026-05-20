@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const ctrl = require('../controllers/sesiones.controller');
+const autenticar = require('../middlewares/autenticar');
 
 router.get('/', ctrl.getAll);
 router.get('/:id', ctrl.getById);
-router.post('/', ctrl.create);
-router.put('/:id', ctrl.update);
-router.delete('/:id', ctrl.remove);
+router.post('/', autenticar, ctrl.create);
+router.put('/:id', autenticar, ctrl.update);
+router.delete('/:id', autenticar, ctrl.remove);
 
 module.exports = router;
