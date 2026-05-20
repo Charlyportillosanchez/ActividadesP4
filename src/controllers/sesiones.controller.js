@@ -1,4 +1,5 @@
 const supabase = require('../db');
+const { pub } = require('../redis/client');
 
 exports.getAll = async (req, res) => {
   const { data, error } = await supabase.from('sesiones').select('*');
@@ -27,6 +28,9 @@ exports.create = async (req, res) => {
     .insert([{ tema, materia, fecha, usuario_id: req.usuario.id }])
     .select();
   if (error) return res.status(500).json({ error: error.message });
+
+  await pub.publish('study:sesion:creada', JSON.stringify(data[0]));
+
   res.status(201).json(data[0]);
 };
 
@@ -46,5 +50,8 @@ exports.remove = async (req, res) => {
     .delete()
     .eq('id', req.params.id);
   if (error) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+  await pub.publish('study:sesion:eliminada', JSON.stringify({ id: req.params.id }));
+
   res.status(200).json({ mensaje: 'Sesión eliminada correctamente' });
 };
