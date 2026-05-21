@@ -24,4 +24,4 @@ API REST para gestión de sesiones de estudio del proyecto StudySync.
 1. Clonar el repositorio
 2. Ejecutar `npm install`
 3. Ejecutar `npm start`
-4. Abrir `https://actividadesp4.onrender.com`
+4. Abrir `https://actividadesp4.onrender.com`git add .
