@@ -7,6 +7,13 @@ const swaggerSpec = require('./swagger/config');
 
 const app = express();
 app.use(express.json());
+app.get('/', (req, res) => {
+  res.json({ 
+    mensaje: 'StudySync API funcionando',
+    version: '1.0.0',
+    docs: '/api-docs'
+  });
+});
 
 const sesionesRoutes = require('./routes/sesiones.routes');
 const authRoutes = require('./routes/auth');
