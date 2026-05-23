@@ -12,10 +12,12 @@ app.use(express.json());
 
 const sesionesRoutes = require('./routes/sesiones.routes');
 const authRoutes = require('./routes/auth');
+const garajesRoutes = require('./routes/garajes.routes');
+const reservasRoutes = require('./routes/reservas.routes');
 
 app.get('/', (req, res) => {
   res.json({ 
-    mensaje: 'StudySync API funcionando',
+    mensaje: 'IoTGaraje API funcionando',
     version: '1.0.0',
     docs: '/api-docs'
   });
@@ -23,6 +25,8 @@ app.get('/', (req, res) => {
 
 app.use('/api/sesiones', sesionesRoutes);
 app.use('/auth', authRoutes);
+app.use('/api/garajes', garajesRoutes);
+app.use('/api/reservas', reservasRoutes);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use((err, req, res, next) => {
