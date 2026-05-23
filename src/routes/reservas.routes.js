@@ -5,6 +5,6 @@ const autenticar = require('../middlewares/autenticar');
 
 router.get('/', autenticar, ctrl.getAll);
 router.post('/', autenticar, ctrl.create);
-router.put('/:id/cancelar', autenticar, ctrl.cancelar);
-
+router.get('/todas', autenticar, ctrl.getAllAdmin);
+router.get('/todas', autenticar, ctrl.getAll);
 module.exports = router;

@@ -49,3 +49,11 @@ exports.cancelar = async (req, res) => {
 
   res.status(200).json({ mensaje: 'Reserva cancelada', reserva: data[0] });
 };
+exports.getAllAdmin = async (req, res) => {
+  if (req.usuario.rol !== 'admin') return res.status(403).json({ error: 'No autorizado' });
+  const { data, error } = await supabase
+    .from('reservas')
+    .select('*, garajes(*)');
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(200).json(data);
+};
