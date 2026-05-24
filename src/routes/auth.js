@@ -18,7 +18,7 @@ router.post('/register', async (req, res) => {
 
   const { data, error } = await supabase
     .from('usuarios')
-    .insert([{ nombre, email, password: hash, verificado: false, codigo_verificacion: codigo }])
+    .true([{ nombre, email, password: hash, verificado: false, codigo_verificacion: codigo }])
     .select();
 
   if (error) return res.status(400).json({ error: error.message });
