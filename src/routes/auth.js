@@ -23,17 +23,12 @@ router.post('/register', async (req, res) => {
 
   if (error) return res.status(400).json({ error: error.message });
 
-  await resend.emails.send({
-    from: 'IoTGaraje <onboarding@resend.dev>',
-    to: email,
-    subject: 'Verifica tu cuenta IoTGaraje',
-    html: `
-      <h2>¡Bienvenido a IoTGaraje!</h2>
-      <p>Hola ${nombre}, tu código de verificación es:</p>
-      <h1 style="color: #1A237E; font-size: 48px;">${codigo}</h1>
-      <p>Ingresa este código en la app para verificar tu cuenta.</p>
-    `
-  });
+  const token = jwt.sign(
+  { id: data[0].id, email: data[0].email, rol: data[0].rol },
+  process.env.JWT_SECRET,
+  { expiresIn: '24h' }
+);
+res.status(201).json({ token });
 
   res.status(201).json({ mensaje: 'Usuario registrado. Revisa tu correo para verificar tu cuenta.' });
 });
