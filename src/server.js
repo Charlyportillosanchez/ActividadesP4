@@ -1,13 +1,39 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 dotenv.config();
 
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger/config');
 
 const app = express();
-app.use(cors());
+
+// Seguridad con Helmet
+app.use(helmet());
+
+// Rate Limiting - 100 peticiones por 15 minutos
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Demasiadas peticiones, intenta en 15 minutos' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// CORS
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'https://actividadesp4.onrender.com',
+    'https://timely-klepon-d2c121.netlify.app'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 const sesionesRoutes = require('./routes/sesiones.routes');
