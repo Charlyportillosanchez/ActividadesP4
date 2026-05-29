@@ -8,7 +8,40 @@ const { pub } = require('../redis/client');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// REGISTRO
+/**
+ * @swagger
+ * /auth/register:
+ *   post:
+ *     summary: Registrar un nuevo usuario
+ *     tags: [Autenticación]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Usuario'
+ *           example:
+ *             nombre: Charly Portillo
+ *             email: charly@gmail.com
+ *             password: "123456"
+ *     responses:
+ *       201:
+ *         description: Usuario registrado exitosamente
+ *         content:
+ *           application/json:
+ *             example:
+ *               mensaje: Usuario registrado
+ *               usuario:
+ *                 id: 1
+ *                 nombre: Charly Portillo
+ *                 email: charly@gmail.com
+ *       400:
+ *         description: Error de validación
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: El campo "nombre" es obligatorio
+ */
 router.post('/register', async (req, res) => {
   const { nombre, email, password } = req.body;
   if (!nombre) return res.status(400).json({ error: 'El campo "nombre" es obligatorio' });
@@ -26,7 +59,36 @@ router.post('/register', async (req, res) => {
   res.status(201).json({ mensaje: 'Usuario registrado', usuario: data[0] });
 });
 
-// LOGIN
+/**
+ * @swagger
+ * /auth/login:
+ *   post:
+ *     summary: Iniciar sesión y obtener token JWT
+ *     tags: [Autenticación]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Login'
+ *           example:
+ *             email: charly@gmail.com
+ *             password: "123456"
+ *     responses:
+ *       200:
+ *         description: Login exitoso
+ *         content:
+ *           application/json:
+ *             example:
+ *               token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *               refreshToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *       401:
+ *         description: Credenciales inválidas
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: Credenciales inválidas
+ */
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email y password requeridos' });
@@ -57,13 +119,37 @@ router.post('/login', async (req, res) => {
   res.status(200).json({ token, refreshToken });
 });
 
-// REFRESH TOKEN
+/**
+ * @swagger
+ * /auth/refresh:
+ *   post:
+ *     summary: Obtener nuevo token usando refresh token
+ *     tags: [Autenticación]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             refreshToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *     responses:
+ *       200:
+ *         description: Nuevo token generado
+ *         content:
+ *           application/json:
+ *             example:
+ *               token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *       401:
+ *         description: Token expirado o inválido
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: Token expirado, inicia sesión nuevamente
+ */
 router.post('/refresh', async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) return res.status(400).json({ error: 'Refresh token requerido' });
 
   try {
-    // Verificar si está en blacklist
     const blacklisted = await pub.get(`blacklist:${refreshToken}`);
     if (blacklisted) return res.status(401).json({ error: 'Token inválido' });
 
@@ -87,12 +173,30 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// LOGOUT - Blacklist en Redis
+/**
+ * @swagger
+ * /auth/logout:
+ *   post:
+ *     summary: Cerrar sesión y agregar token a blacklist
+ *     tags: [Autenticación]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             refreshToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *     responses:
+ *       200:
+ *         description: Sesión cerrada
+ *         content:
+ *           application/json:
+ *             example:
+ *               mensaje: Sesión cerrada correctamente
+ */
 router.post('/logout', async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) return res.status(400).json({ error: 'Refresh token requerido' });
 
-  // Guardar en blacklist por 7 días
   await pub.setex(`blacklist:${refreshToken}`, 7 * 24 * 60 * 60, 'blacklisted');
 
   res.status(200).json({ mensaje: 'Sesión cerrada correctamente' });
