@@ -28,7 +28,8 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'https://actividadesp4.onrender.com',
-    'https://timely-klepon-d2c121.netlify.app'
+    'https://timely-klepon-d2c121.netlify.app',
+    'https://admirable-dango-13a1f3.netlify.app'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
