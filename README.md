@@ -17,6 +17,26 @@ API REST para gestión de sesiones de estudio y garajes con base de datos en la 
 | **Conclusión** | Son complementarios, no competidores |
 
 ## Arquitectura
+
+┌─────────────────┐     HTTP/JWT    ┌──────────────────────┐
+│  Thunder Client  │ ─────────────► │   API REST (Express)  │
+│  Flutter Web App │                │   Render.com          │
+└─────────────────┘                └──────┬───────┬────────┘
+│       │
+┌───────────┘       └───────────┐
+│                               │
+▼                               ▼
+┌─────────────────┐             ┌─────────────────┐
+│    Supabase     │             │  Upstash Redis  │
+│  PostgreSQL     │             │   Pub/Sub       │
+│  (Persistencia) │             │  (Tiempo Real)  │
+└─────────────────┘             └────────┬────────┘
+│
+▼
+┌─────────────────┐
+│  subscriber.js  │
+│ (Notificaciones)│
+└─────────────────┘
 ## Flujo completo
 1. Cliente hace POST /api/sesiones con token JWT
 2. API valida el token

@@ -25,12 +25,18 @@ app.use(limiter);
 
 // CORS
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'https://actividadesp4.onrender.com',
-    'https://timely-klepon-d2c121.netlify.app',
-    'https://admirable-dango-13a1f3.netlify.app'
-  ],
+  origin: function(origin, callback) {
+    const allowed = [
+      'https://actividadesp4.onrender.com',
+      'https://timely-klepon-d2c121.netlify.app',
+      'https://admirable-dango-13a1f3.netlify.app'
+    ];
+    if (!origin || origin.startsWith('http://localhost') || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('No permitido por CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
