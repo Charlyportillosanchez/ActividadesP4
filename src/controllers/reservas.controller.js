@@ -1,5 +1,6 @@
 const supabase = require('../db');
 const { pub } = require('../redis/client');
+const { ocupadosEnVentana, ocupadosAhora } = require('../utils/ocupacion');
 
 exports.getAll = async (req, res) => {
   const { data, error } = await supabase
@@ -20,37 +21,70 @@ exports.create = async (req, res) => {
 
   const espacios = Number(req.body.espacios) > 0 ? Number(req.body.espacios) : 1;
 
+  // Horario de la reserva: si el cliente no envía "inicio", empieza ahora.
+  const ahora = new Date();
+  let inicio = ahora;
+  if (req.body.inicio) {
+    inicio = new Date(req.body.inicio);
+    if (isNaN(inicio.getTime())) {
+      return res.status(400).json({ error: 'El campo "inicio" no es una fecha válida' });
+    }
+    if (inicio.getTime() < ahora.getTime() - 5 * 60 * 1000) {
+      return res.status(400).json({ error: 'La reserva no puede empezar en el pasado' });
+    }
+    if (inicio.getTime() > ahora.getTime() + 30 * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: 'La reserva no puede ser con más de 30 días de anticipación' });
+    }
+  }
+  const fin = new Date(inicio.getTime() + Number(horas) * 60 * 60 * 1000);
+
   const { data: garaje, error: garajeError } = await supabase
     .from('garajes').select('*').eq('id', garaje_id).single();
   if (garajeError) return res.status(404).json({ error: 'Garaje no encontrado' });
 
-  // Calculamos cuántos espacios siguen ocupados por reservas activas y
-  // verificamos que haya cupo suficiente para los espacios solicitados.
+  // Verificamos el cupo solo contra las reservas que se cruzan con el
+  // horario solicitado (las de otros horarios no estorban).
   const capacidad = Number(garaje.capacidad) > 0 ? Number(garaje.capacidad) : 1;
   const { data: activas } = await supabase
     .from('reservas').select('*').eq('garaje_id', garaje_id).eq('estado', 'activa');
-  const ocupados = (activas || []).reduce(
-    (suma, r) => suma + (Number(r.espacios) > 0 ? Number(r.espacios) : 1), 0);
+  const ocupados = ocupadosEnVentana(activas, inicio, fin);
 
   if (ocupados + espacios > capacidad) {
     const libres = Math.max(capacidad - ocupados, 0);
     return res.status(400).json({
       error: libres === 0
-        ? 'El garaje no tiene espacios disponibles'
-        : `Solo quedan ${libres} espacio(s) disponible(s)`
+        ? 'El garaje no tiene espacios disponibles en ese horario'
+        : `Solo quedan ${libres} espacio(s) disponible(s) en ese horario`
     });
   }
 
   const total = garaje.precio_hora * horas * espacios;
 
-  const { data, error } = await supabase
+  // Insertamos con horario; si la base aún no tiene las columnas
+  // inicio/fin (migración pendiente), reintentamos sin ellas.
+  let insercion = await supabase
     .from('reservas')
-    .insert([{ garaje_id, usuario_id: req.usuario.id, horas, espacios, total }])
+    .insert([{
+      garaje_id,
+      usuario_id: req.usuario.id,
+      horas,
+      espacios,
+      total,
+      inicio: inicio.toISOString(),
+      fin: fin.toISOString(),
+    }])
     .select();
+  if (insercion.error && /inicio|fin/.test(insercion.error.message || '')) {
+    insercion = await supabase
+      .from('reservas')
+      .insert([{ garaje_id, usuario_id: req.usuario.id, horas, espacios, total }])
+      .select();
+  }
+  const { data, error } = insercion;
   if (error) return res.status(500).json({ error: error.message });
 
-  // El garaje deja de estar disponible solo cuando se llena por completo.
-  const disponible = (ocupados + espacios) < capacidad;
+  // Disponibilidad mostrada en el mapa: según la ocupación de ahora mismo.
+  const disponible = ocupadosAhora([...(activas || []), data[0]]) < capacidad;
   await supabase.from('garajes').update({ disponible }).eq('id', garaje_id);
 
   await pub.publish('iot:reserva:creada', JSON.stringify({
@@ -79,18 +113,16 @@ exports.cancelar = async (req, res) => {
     .from('reservas').update({ estado: 'cancelada' }).eq('id', req.params.id).select();
   if (error || !data.length) return res.status(404).json({ error: 'Reserva no encontrada' });
 
-  // Recalculamos la disponibilidad real del garaje según las reservas activas
-  // restantes (antes se marcaba disponible=true a ciegas).
+  // Recalculamos la disponibilidad real del garaje según las reservas
+  // que ocupan espacio en este momento.
   const garajeId = data[0].garaje_id;
   const { data: garaje } = await supabase
     .from('garajes').select('capacidad').eq('id', garajeId).single();
   const capacidad = Number(garaje?.capacidad) > 0 ? Number(garaje.capacidad) : 1;
   const { data: activas } = await supabase
-    .from('reservas').select('espacios').eq('garaje_id', garajeId).eq('estado', 'activa');
-  const ocupados = (activas || []).reduce(
-    (suma, r) => suma + (Number(r.espacios) > 0 ? Number(r.espacios) : 1), 0);
+    .from('reservas').select('*').eq('garaje_id', garajeId).eq('estado', 'activa');
   await supabase.from('garajes')
-    .update({ disponible: ocupados < capacidad }).eq('id', garajeId);
+    .update({ disponible: ocupadosAhora(activas) < capacidad }).eq('id', garajeId);
 
   await pub.publish('iot:reserva:cancelada', JSON.stringify({
     tipo: 'RESERVA_CANCELADA',

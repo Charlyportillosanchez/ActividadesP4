@@ -1,5 +1,6 @@
 const supabase = require('../db');
 const { pub } = require('../redis/client');
+const { reservaOcupaAhora, espaciosDe } = require('../utils/ocupacion');
 
 // Verifica que el usuario autenticado sea el dueño del garaje (o admin).
 // Devuelve el garaje si tiene permiso, o null si no.
@@ -17,25 +18,90 @@ exports.getAll = async (req, res) => {
   const { data: garajes, error } = await supabase.from('garajes').select('*');
   if (error) return res.status(500).json({ error: error.message });
 
-  // Contamos los espacios ocupados por garaje a partir de las reservas activas.
-  // Así cualquier usuario (cliente o propietario) ve la disponibilidad real
-  // sin exponer datos privados de las reservas.
+  // Contamos los espacios ocupados por garaje a partir de las reservas
+  // activas vigentes EN ESTE MOMENTO (las reservas para más tarde no
+  // ocupan espacio ahora). Así cualquier usuario ve la disponibilidad real.
   const { data: reservas } = await supabase
     .from('reservas').select('*').eq('estado', 'activa');
 
   const ocupadosPorGaraje = {};
   (reservas || []).forEach((r) => {
-    const esp = Number(r.espacios) > 0 ? Number(r.espacios) : 1;
-    ocupadosPorGaraje[r.garaje_id] = (ocupadosPorGaraje[r.garaje_id] || 0) + esp;
+    if (!reservaOcupaAhora(r)) return;
+    ocupadosPorGaraje[r.garaje_id] = (ocupadosPorGaraje[r.garaje_id] || 0) + espaciosDe(r);
+  });
+
+  // Promedio y cantidad de calificaciones por garaje.
+  // Si la tabla aún no existe (migración pendiente), seguimos sin estrellas.
+  const notasPorGaraje = {};
+  const { data: notas } = await supabase
+    .from('calificaciones').select('garaje_id, estrellas');
+  (notas || []).forEach((n) => {
+    const acc = notasPorGaraje[n.garaje_id] || { suma: 0, cantidad: 0 };
+    acc.suma += Number(n.estrellas) || 0;
+    acc.cantidad += 1;
+    notasPorGaraje[n.garaje_id] = acc;
   });
 
   const resultado = garajes.map((g) => {
     const capacidad = Number(g.capacidad) > 0 ? Number(g.capacidad) : 1;
     const ocupados = Math.min(ocupadosPorGaraje[g.id] || 0, capacidad);
-    return { ...g, capacidad, ocupados, disponible: ocupados < capacidad };
+    const nota = notasPorGaraje[g.id];
+    return {
+      ...g,
+      capacidad,
+      ocupados,
+      disponible: ocupados < capacidad,
+      calificacion: nota ? Math.round((nota.suma / nota.cantidad) * 10) / 10 : null,
+      total_calificaciones: nota ? nota.cantidad : 0,
+    };
   });
 
   res.status(200).json(resultado);
+};
+
+// Calificar un garaje (1 a 5 estrellas, comentario opcional).
+// Si el usuario ya lo calificó antes, se actualiza su nota.
+exports.calificar = async (req, res) => {
+  const { estrellas, comentario } = req.body;
+  const valor = Number(estrellas);
+  if (!valor || valor < 1 || valor > 5) {
+    return res.status(400).json({ error: 'Las estrellas deben ser un número entre 1 y 5' });
+  }
+
+  const { data: garaje, error: garajeError } = await supabase
+    .from('garajes').select('id, usuario_id').eq('id', req.params.id).single();
+  if (garajeError || !garaje) return res.status(404).json({ error: 'Garaje no encontrado' });
+  if (garaje.usuario_id === req.usuario.id) {
+    return res.status(400).json({ error: 'No puedes calificar tu propio garaje' });
+  }
+
+  const { data, error } = await supabase
+    .from('calificaciones')
+    .upsert(
+      [{
+        garaje_id: garaje.id,
+        usuario_id: req.usuario.id,
+        estrellas: Math.round(valor),
+        comentario: comentario ? String(comentario).slice(0, 300) : null,
+      }],
+      { onConflict: 'garaje_id,usuario_id' },
+    )
+    .select();
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.status(201).json({ mensaje: 'Calificación guardada', calificacion: data[0] });
+};
+
+// Lista de calificaciones de un garaje (para mostrar reseñas).
+exports.calificaciones = async (req, res) => {
+  const { data, error } = await supabase
+    .from('calificaciones')
+    .select('estrellas, comentario, created_at, usuarios(nombre)')
+    .eq('garaje_id', req.params.id)
+    .order('created_at', { ascending: false })
+    .limit(30);
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(200).json(data);
 };
 
 exports.getById = async (req, res) => {
