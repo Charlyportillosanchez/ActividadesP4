@@ -14,6 +14,9 @@ exports.create = async (req, res) => {
   const { garaje_id, horas } = req.body;
   if (!garaje_id) return res.status(400).json({ error: 'El campo "garaje_id" es obligatorio' });
   if (!horas) return res.status(400).json({ error: 'El campo "horas" es obligatorio' });
+  if (isNaN(Number(horas)) || Number(horas) <= 0 || Number(horas) > 24) {
+    return res.status(400).json({ error: 'El campo "horas" debe ser un número entre 1 y 24' });
+  }
 
   const espacios = Number(req.body.espacios) > 0 ? Number(req.body.espacios) : 1;
 
@@ -61,11 +64,40 @@ exports.create = async (req, res) => {
 };
 
 exports.cancelar = async (req, res) => {
+  // Solo el dueño de la reserva (o un admin) puede cancelarla.
+  const { data: reserva, error: buscarError } = await supabase
+    .from('reservas').select('*').eq('id', req.params.id).single();
+  if (buscarError || !reserva) return res.status(404).json({ error: 'Reserva no encontrada' });
+  if (reserva.usuario_id !== req.usuario.id && req.usuario.rol !== 'admin') {
+    return res.status(403).json({ error: 'No tienes permiso para cancelar esta reserva' });
+  }
+  if (reserva.estado === 'cancelada') {
+    return res.status(400).json({ error: 'La reserva ya está cancelada' });
+  }
+
   const { data, error } = await supabase
     .from('reservas').update({ estado: 'cancelada' }).eq('id', req.params.id).select();
   if (error || !data.length) return res.status(404).json({ error: 'Reserva no encontrada' });
 
-  await supabase.from('garajes').update({ disponible: true }).eq('id', data[0].garaje_id);
+  // Recalculamos la disponibilidad real del garaje según las reservas activas
+  // restantes (antes se marcaba disponible=true a ciegas).
+  const garajeId = data[0].garaje_id;
+  const { data: garaje } = await supabase
+    .from('garajes').select('capacidad').eq('id', garajeId).single();
+  const capacidad = Number(garaje?.capacidad) > 0 ? Number(garaje.capacidad) : 1;
+  const { data: activas } = await supabase
+    .from('reservas').select('espacios').eq('garaje_id', garajeId).eq('estado', 'activa');
+  const ocupados = (activas || []).reduce(
+    (suma, r) => suma + (Number(r.espacios) > 0 ? Number(r.espacios) : 1), 0);
+  await supabase.from('garajes')
+    .update({ disponible: ocupados < capacidad }).eq('id', garajeId);
+
+  await pub.publish('iot:reserva:cancelada', JSON.stringify({
+    tipo: 'RESERVA_CANCELADA',
+    payload: data[0],
+    timestamp: new Date().toISOString(),
+    version: '1.0'
+  }));
 
   res.status(200).json({ mensaje: 'Reserva cancelada', reserva: data[0] });
 };

@@ -48,15 +48,31 @@ router.post('/register', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'El campo "email" es obligatorio' });
   if (!password) return res.status(400).json({ error: 'El campo "password" es obligatorio' });
 
+  // Validaciones básicas
+  const emailNormalizado = String(email).trim().toLowerCase();
+  const emailValido = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNormalizado);
+  if (!emailValido) return res.status(400).json({ error: 'El email no tiene un formato válido' });
+  if (String(password).length < 6) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+  }
+
+  // Evitar duplicados con mensaje claro
+  const { data: existente } = await supabase
+    .from('usuarios').select('id').eq('email', emailNormalizado).maybeSingle();
+  if (existente) return res.status(400).json({ error: 'Ya existe una cuenta con ese email' });
+
   const hash = await bcrypt.hash(password, 10);
 
   const { data, error } = await supabase
     .from('usuarios')
-    .insert([{ nombre, email, password: hash, verificado: true, rol: 'usuario' }])
+    .insert([{ nombre: String(nombre).trim(), email: emailNormalizado, password: hash, verificado: true, rol: 'usuario' }])
     .select();
 
   if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json({ mensaje: 'Usuario registrado', usuario: data[0] });
+
+  // Nunca devolver el hash de la contraseña
+  const { password: _omitir, ...usuarioSeguro } = data[0];
+  res.status(201).json({ mensaje: 'Usuario registrado', usuario: usuarioSeguro });
 });
 
 /**
@@ -96,7 +112,7 @@ router.post('/login', async (req, res) => {
   const { data, error } = await supabase
     .from('usuarios')
     .select('*')
-    .eq('email', email)
+    .eq('email', String(email).trim().toLowerCase())
     .single();
 
   if (error || !data) return res.status(401).json({ error: 'Credenciales inválidas' });
@@ -160,6 +176,8 @@ router.post('/refresh', async (req, res) => {
       .select('*')
       .eq('id', decoded.id)
       .single();
+
+    if (!data) return res.status(401).json({ error: 'Usuario no encontrado' });
 
     const newToken = jwt.sign(
       { id: data.id, email: data.email, rol: data.rol },

@@ -31,7 +31,9 @@ app.use(cors({
       'https://timely-klepon-d2c121.netlify.app',
       'https://admirable-dango-13a1f3.netlify.app'
     ];
-    if (!origin || origin.startsWith('http://localhost') || allowed.includes(origin)) {
+    // Se permite cualquier sitio de Netlify (deploys de la app web)
+    // además de los orígenes de la lista y localhost para desarrollo.
+    if (!origin || origin.startsWith('http://localhost') || origin.endsWith('.netlify.app') || allowed.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('No permitido por CORS'));
