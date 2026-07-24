@@ -43,7 +43,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json());
+// Límite de 6 MB para permitir la subida de fotos de garajes en base64.
+app.use(express.json({ limit: '6mb' }));
 
 const sesionesRoutes = require('./routes/sesiones.routes');
 const authRoutes = require('./routes/auth');

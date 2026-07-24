@@ -92,6 +92,53 @@ exports.calificar = async (req, res) => {
   res.status(201).json({ mensaje: 'Calificación guardada', calificacion: data[0] });
 };
 
+// Subir una foto del garaje (solo el dueño, máximo 3 fotos).
+// El cliente envía la imagen en base64 y la guardamos en Supabase Storage.
+exports.subirFoto = async (req, res) => {
+  const permiso = await garajeDelUsuario(req.params.id, req.usuario);
+  if (!permiso.garaje) {
+    return res.status(permiso.status).json({ error: permiso.mensaje });
+  }
+
+  const { imagen, extension } = req.body;
+  if (!imagen) return res.status(400).json({ error: 'Falta la imagen (base64)' });
+
+  const fotos = Array.isArray(permiso.garaje.fotos) ? permiso.garaje.fotos : [];
+  if (fotos.length >= 3) {
+    return res.status(400).json({ error: 'Máximo 3 fotos por garaje' });
+  }
+
+  let buffer;
+  try {
+    buffer = Buffer.from(imagen, 'base64');
+  } catch (e) {
+    return res.status(400).json({ error: 'La imagen no es un base64 válido' });
+  }
+  if (buffer.length > 3 * 1024 * 1024) {
+    return res.status(400).json({ error: 'La foto no debe superar 3 MB' });
+  }
+
+  const extPermitidas = ['jpg', 'jpeg', 'png', 'webp'];
+  const ext = extPermitidas.includes(String(extension || '').toLowerCase())
+    ? String(extension).toLowerCase()
+    : 'jpg';
+
+  const ruta = `garaje_${permiso.garaje.id}_${Date.now()}.${ext}`;
+  const { error: subidaError } = await supabase.storage
+    .from('garajes')
+    .upload(ruta, buffer, { contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}` });
+  if (subidaError) return res.status(500).json({ error: subidaError.message });
+
+  const { data: publica } = supabase.storage.from('garajes').getPublicUrl(ruta);
+  const nuevasFotos = [...fotos, publica.publicUrl];
+
+  const { error: updateError } = await supabase
+    .from('garajes').update({ fotos: nuevasFotos }).eq('id', permiso.garaje.id);
+  if (updateError) return res.status(500).json({ error: updateError.message });
+
+  res.status(201).json({ mensaje: 'Foto subida', fotos: nuevasFotos });
+};
+
 // Lista de calificaciones de un garaje (para mostrar reseñas).
 exports.calificaciones = async (req, res) => {
   const { data, error } = await supabase
