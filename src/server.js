@@ -1,8 +1,11 @@
 const express = require('express');
+const http = require('http');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { Server } = require('socket.io');
+const { setIO } = require('./realtime');
 dotenv.config();
 
 const swaggerUi = require('swagger-ui-express');
@@ -63,6 +66,7 @@ app.use('/api/sesiones', sesionesRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/garajes', garajesRoutes);
 app.use('/api/reservas', reservasRoutes);
+app.use('/api/chat', require('./routes/chat.routes'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use((err, req, res, next) => {
@@ -71,5 +75,21 @@ app.use((err, req, res, next) => {
 
 require('./subscribers/notificaciones');
 
+// --- WebSockets: actualizaciones en tiempo real ---
+// Los clientes (app Flutter) se conectan y reciben eventos al instante
+// cuando alguien crea un garaje, reserva, cancela o manda un mensaje.
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+});
+setIO(io);
+
+io.on('connection', (socket) => {
+  console.log(`[Socket] Cliente conectado: ${socket.id}`);
+  socket.on('disconnect', () => {
+    console.log(`[Socket] Cliente desconectado: ${socket.id}`);
+  });
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));
+server.listen(PORT, () => console.log(`Servidor corriendo en puerto ${PORT}`));

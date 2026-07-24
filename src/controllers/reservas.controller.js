@@ -1,5 +1,6 @@
 const supabase = require('../db');
 const { pub } = require('../redis/client');
+const { emitir } = require('../realtime');
 const { ocupadosEnVentana, ocupadosAhora } = require('../utils/ocupacion');
 
 exports.getAll = async (req, res) => {
@@ -94,6 +95,9 @@ exports.create = async (req, res) => {
     version: '1.0'
   }));
 
+  // Tiempo real: todos los mapas conectados se actualizan al instante.
+  emitir('actualizacion', { tipo: 'RESERVA_CREADA', garaje_id });
+
   res.status(201).json(data[0]);
 };
 
@@ -130,6 +134,8 @@ exports.cancelar = async (req, res) => {
     timestamp: new Date().toISOString(),
     version: '1.0'
   }));
+
+  emitir('actualizacion', { tipo: 'RESERVA_CANCELADA', garaje_id: garajeId });
 
   res.status(200).json({ mensaje: 'Reserva cancelada', reserva: data[0] });
 };

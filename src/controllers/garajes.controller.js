@@ -1,5 +1,6 @@
 const supabase = require('../db');
 const { pub } = require('../redis/client');
+const { emitir } = require('../realtime');
 const { reservaOcupaAhora, espaciosDe } = require('../utils/ocupacion');
 
 // Verifica que el usuario autenticado sea el dueño del garaje (o admin).
@@ -189,6 +190,8 @@ exports.create = async (req, res) => {
     version: '1.0'
   }));
 
+  emitir('actualizacion', { tipo: 'GARAJE_CREADO', garaje_id: data[0].id });
+
   res.status(201).json(data[0]);
 };
 
@@ -228,5 +231,8 @@ exports.remove = async (req, res) => {
 
   const { error } = await supabase.from('garajes').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
+
+  emitir('actualizacion', { tipo: 'GARAJE_ELIMINADO', garaje_id: req.params.id });
+
   res.status(200).json({ mensaje: 'Garaje eliminado correctamente' });
 };
