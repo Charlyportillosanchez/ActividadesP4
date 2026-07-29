@@ -67,6 +67,7 @@ app.use('/auth', authRoutes);
 app.use('/api/garajes', garajesRoutes);
 app.use('/api/reservas', reservasRoutes);
 app.use('/api/chat', require('./routes/chat.routes'));
+app.use('/api/vehiculos', require('./routes/vehiculos.routes'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use((err, req, res, next) => {

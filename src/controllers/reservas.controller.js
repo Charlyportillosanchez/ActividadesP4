@@ -4,23 +4,55 @@ const { emitir } = require('../realtime');
 const { ocupadosEnVentana, ocupadosAhora } = require('../utils/ocupacion');
 
 exports.getAll = async (req, res) => {
-  const { data, error } = await supabase
+  // Intentamos incluir el vehículo; si la columna aún no existe (migración
+  // pendiente), reintentamos sin él para no romper la pantalla de reservas.
+  let { data, error } = await supabase
     .from('reservas')
-    .select('*, garajes(*)')
-    .eq('usuario_id', req.usuario.id);
+    .select('*, garajes(*), vehiculos(*)')
+    .eq('usuario_id', req.usuario.id)
+    .order('id', { ascending: false });
+  if (error) {
+    const alt = await supabase
+      .from('reservas')
+      .select('*, garajes(*)')
+      .eq('usuario_id', req.usuario.id)
+      .order('id', { ascending: false });
+    data = alt.data;
+    error = alt.error;
+  }
   if (error) return res.status(500).json({ error: error.message });
   res.status(200).json(data);
 };
 
 exports.create = async (req, res) => {
-  const { garaje_id, horas } = req.body;
+  const { garaje_id, horas, vehiculo_id } = req.body;
   if (!garaje_id) return res.status(400).json({ error: 'El campo "garaje_id" es obligatorio' });
   if (!horas) return res.status(400).json({ error: 'El campo "horas" es obligatorio' });
   if (isNaN(Number(horas)) || Number(horas) <= 0 || Number(horas) > 24) {
     return res.status(400).json({ error: 'El campo "horas" debe ser un número entre 1 y 24' });
   }
+  if (!vehiculo_id) {
+    return res.status(400).json({ error: 'Debes elegir un vehículo para reservar' });
+  }
 
-  const espacios = Number(req.body.espacios) > 0 ? Number(req.body.espacios) : 1;
+  // El vehículo debe ser del usuario y estar APROBADO. El tamaño (factor)
+  // define cuántos espacios ocupa: auto=1, camioneta=2, camión=3.
+  const { data: vehiculo, error: vehError } = await supabase
+    .from('vehiculos').select('*').eq('id', vehiculo_id).single();
+  if (vehError || !vehiculo) {
+    return res.status(404).json({ error: 'Vehículo no encontrado' });
+  }
+  if (vehiculo.usuario_id !== req.usuario.id) {
+    return res.status(403).json({ error: 'Ese vehículo no es tuyo' });
+  }
+  if (vehiculo.estado !== 'aprobado') {
+    return res.status(400).json({
+      error: 'Tu vehículo aún no está aprobado por el administrador',
+    });
+  }
+
+  const espacios = Number(vehiculo.factor_espacio) > 0
+    ? Number(vehiculo.factor_espacio) : 1;
 
   // Horario de la reserva: si el cliente no envía "inicio", empieza ahora.
   const ahora = new Date();
@@ -44,10 +76,12 @@ exports.create = async (req, res) => {
   if (garajeError) return res.status(404).json({ error: 'Garaje no encontrado' });
 
   // Verificamos el cupo solo contra las reservas que se cruzan con el
-  // horario solicitado (las de otros horarios no estorban).
+  // horario solicitado (las de otros horarios no estorban). Cuentan tanto
+  // las activas como las pendientes (ambas retienen el espacio).
   const capacidad = Number(garaje.capacidad) > 0 ? Number(garaje.capacidad) : 1;
   const { data: activas } = await supabase
-    .from('reservas').select('*').eq('garaje_id', garaje_id).eq('estado', 'activa');
+    .from('reservas').select('*').eq('garaje_id', garaje_id)
+    .in('estado', ['activa', 'pendiente']);
   const ocupados = ocupadosEnVentana(activas, inicio, fin);
 
   if (ocupados + espacios > capacidad) {
@@ -61,21 +95,23 @@ exports.create = async (req, res) => {
 
   const total = garaje.precio_hora * horas * espacios;
 
-  // Insertamos con horario; si la base aún no tiene las columnas
-  // inicio/fin (migración pendiente), reintentamos sin ellas.
-  let insercion = await supabase
-    .from('reservas')
-    .insert([{
-      garaje_id,
-      usuario_id: req.usuario.id,
-      horas,
-      espacios,
-      total,
-      inicio: inicio.toISOString(),
-      fin: fin.toISOString(),
-    }])
-    .select();
-  if (insercion.error && /inicio|fin/.test(insercion.error.message || '')) {
+  // La reserva nace 'pendiente': el dueño del garaje debe aceptarla.
+  const registro = {
+    garaje_id,
+    usuario_id: req.usuario.id,
+    vehiculo_id,
+    horas,
+    espacios,
+    total,
+    estado: 'pendiente',
+    inicio: inicio.toISOString(),
+    fin: fin.toISOString(),
+  };
+
+  // Insertamos con todos los campos; si la base aún no tiene alguna columna
+  // nueva (migración pendiente), reintentamos con lo mínimo.
+  let insercion = await supabase.from('reservas').insert([registro]).select();
+  if (insercion.error && /inicio|fin|vehiculo_id|estado/.test(insercion.error.message || '')) {
     insercion = await supabase
       .from('reservas')
       .insert([{ garaje_id, usuario_id: req.usuario.id, horas, espacios, total }])
@@ -95,10 +131,51 @@ exports.create = async (req, res) => {
     version: '1.0'
   }));
 
-  // Tiempo real: todos los mapas conectados se actualizan al instante.
+  // Tiempo real: el mapa y el panel del dueño se actualizan al instante.
   emitir('actualizacion', { tipo: 'RESERVA_CREADA', garaje_id });
 
   res.status(201).json(data[0]);
+};
+
+// El dueño del garaje acepta o rechaza una reserva pendiente.
+exports.revisar = async (req, res) => {
+  const aprobar = req.body.aprobar === true;
+
+  const { data: reserva, error: buscarError } = await supabase
+    .from('reservas').select('*, garajes(usuario_id, capacidad)')
+    .eq('id', req.params.id).single();
+  if (buscarError || !reserva) return res.status(404).json({ error: 'Reserva no encontrada' });
+
+  // Solo el dueño del garaje (o admin) puede revisarla.
+  const dueno = reserva.garajes?.usuario_id;
+  if (dueno !== req.usuario.id && req.usuario.rol !== 'admin') {
+    return res.status(403).json({ error: 'No puedes revisar esta reserva' });
+  }
+  if (reserva.estado !== 'pendiente') {
+    return res.status(400).json({ error: 'Esta reserva ya fue revisada' });
+  }
+
+  const nuevoEstado = aprobar ? 'activa' : 'rechazada';
+  const { data, error } = await supabase
+    .from('reservas').update({ estado: nuevoEstado }).eq('id', req.params.id).select();
+  if (error || !data.length) return res.status(500).json({ error: 'No se pudo actualizar' });
+
+  // Recalcular disponibilidad del garaje.
+  const garajeId = reserva.garaje_id;
+  const capacidad = Number(reserva.garajes?.capacidad) > 0
+    ? Number(reserva.garajes.capacidad) : 1;
+  const { data: vigentes } = await supabase
+    .from('reservas').select('*').eq('garaje_id', garajeId)
+    .in('estado', ['activa', 'pendiente']);
+  await supabase.from('garajes')
+    .update({ disponible: ocupadosAhora(vigentes) < capacidad }).eq('id', garajeId);
+
+  emitir('actualizacion', { tipo: 'RESERVA_REVISADA', garaje_id: garajeId });
+
+  res.status(200).json({
+    mensaje: aprobar ? 'Reserva aceptada' : 'Reserva rechazada',
+    reserva: data[0],
+  });
 };
 
 exports.cancelar = async (req, res) => {
@@ -157,10 +234,33 @@ exports.getRecibidas = async (req, res) => {
   const ids = (misGarajes || []).map((g) => g.id);
   if (ids.length === 0) return res.status(200).json([]);
 
-  const { data, error } = await supabase
+  // Incluimos los datos del vehículo para que el dueño vea qué auto es.
+  let { data, error } = await supabase
     .from('reservas')
-    .select('*, garajes(*)')
-    .in('garaje_id', ids);
+    .select('*, garajes(*), vehiculos(*)')
+    .in('garaje_id', ids)
+    .order('id', { ascending: false });
+  if (error) {
+    const alt = await supabase
+      .from('reservas').select('*, garajes(*)')
+      .in('garaje_id', ids).order('id', { ascending: false });
+    data = alt.data;
+    error = alt.error;
+  }
   if (error) return res.status(500).json({ error: error.message });
-  res.status(200).json(data);
+
+  // Añadimos el nombre del cliente de cada reserva (consulta aparte para no
+  // depender del nombre de la llave foránea).
+  const clienteIds = [...new Set((data || []).map((r) => r.usuario_id))];
+  let nombres = {};
+  if (clienteIds.length > 0) {
+    const { data: usuarios } = await supabase
+      .from('usuarios').select('id, nombre').in('id', clienteIds);
+    (usuarios || []).forEach((u) => { nombres[u.id] = u.nombre; });
+  }
+  const resultado = (data || []).map((r) => ({
+    ...r,
+    usuarios: { nombre: nombres[r.usuario_id] || null },
+  }));
+  res.status(200).json(resultado);
 };

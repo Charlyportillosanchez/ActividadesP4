@@ -2,6 +2,7 @@ const supabase = require('../db');
 const { pub } = require('../redis/client');
 const { emitir } = require('../realtime');
 const { reservaOcupaAhora, espaciosDe } = require('../utils/ocupacion');
+const { subirImagen } = require('../utils/storage');
 
 // Verifica que el usuario autenticado sea el dueño del garaje (o admin).
 // Devuelve el garaje si tiene permiso, o null si no.
@@ -16,14 +17,18 @@ async function garajeDelUsuario(garajeId, usuario) {
 }
 
 exports.getAll = async (req, res) => {
-  const { data: garajes, error } = await supabase.from('garajes').select('*');
+  const { data: todos, error } = await supabase.from('garajes').select('*');
   if (error) return res.status(500).json({ error: error.message });
+
+  // En el mapa (endpoint público) solo se muestran garajes APROBADOS.
+  // Si un garaje viejo no tiene columna estado, se considera aprobado.
+  const garajes = todos.filter((g) => (g.estado || 'aprobado') === 'aprobado');
 
   // Contamos los espacios ocupados por garaje a partir de las reservas
   // activas vigentes EN ESTE MOMENTO (las reservas para más tarde no
   // ocupan espacio ahora). Así cualquier usuario ve la disponibilidad real.
   const { data: reservas } = await supabase
-    .from('reservas').select('*').eq('estado', 'activa');
+    .from('reservas').select('*').in('estado', ['activa', 'pendiente']);
 
   const ocupadosPorGaraje = {};
   (reservas || []).forEach((r) => {
@@ -140,6 +145,32 @@ exports.subirFoto = async (req, res) => {
   res.status(201).json({ mensaje: 'Foto subida', fotos: nuevasFotos });
 };
 
+// Subir un documento del garaje: 'carnet' (del dueño) o 'propiedad'
+// (tarjeta de propiedad del inmueble o permiso). Solo el dueño.
+exports.subirDocumento = async (req, res) => {
+  const permiso = await garajeDelUsuario(req.params.id, req.usuario);
+  if (!permiso.garaje) {
+    return res.status(permiso.status).json({ error: permiso.mensaje });
+  }
+
+  const { tipo, imagen, extension } = req.body;
+  const columna = tipo === 'carnet' ? 'doc_carnet'
+    : tipo === 'propiedad' ? 'doc_propiedad' : null;
+  if (!columna) {
+    return res.status(400).json({ error: 'Tipo de documento inválido (carnet o propiedad)' });
+  }
+
+  const subida = await subirImagen('documentos',
+    `garaje_${permiso.garaje.id}_${tipo}`, imagen, extension);
+  if (subida.error) return res.status(400).json({ error: subida.error });
+
+  const { error } = await supabase
+    .from('garajes').update({ [columna]: subida.url }).eq('id', permiso.garaje.id);
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.status(201).json({ mensaje: 'Documento subido', url: subida.url });
+};
+
 // Lista de calificaciones de un garaje (para mostrar reseñas).
 exports.calificaciones = async (req, res) => {
   const { data, error } = await supabase
@@ -160,7 +191,8 @@ exports.getById = async (req, res) => {
 };
 
 exports.create = async (req, res) => {
-  const { nombre, direccion, anillo, precio_hora, latitud, longitud, capacidad } = req.body;
+  const { nombre, direccion, anillo, precio_hora, latitud, longitud, capacidad,
+    ancho, largo, descripcion } = req.body;
   if (!nombre) return res.status(400).json({ error: 'El campo "nombre" es obligatorio' });
   if (!direccion) return res.status(400).json({ error: 'El campo "direccion" es obligatorio' });
   if (!anillo) return res.status(400).json({ error: 'El campo "anillo" es obligatorio' });
@@ -176,11 +208,30 @@ exports.create = async (req, res) => {
   }
 
   const cap = Number(capacidad) > 0 ? Number(capacidad) : 1;
+  const anchoNum = Number(ancho) > 0 ? Number(ancho) : null;
+  const largoNum = Number(largo) > 0 ? Number(largo) : null;
+  const alturaNum = Number(req.body.altura) > 0 ? Number(req.body.altura) : null;
+  const m2 = anchoNum && largoNum ? Math.round(anchoNum * largoNum * 100) / 100 : null;
 
-  const { data, error } = await supabase
-    .from('garajes')
-    .insert([{ nombre, direccion, anillo, precio_hora, latitud, longitud, capacidad: cap, disponible: true, usuario_id: req.usuario.id }])
-    .select();
+  // Los garajes nuevos quedan PENDIENTES hasta que el admin los apruebe.
+  // (Si la columna estado no existe todavía, reintentamos sin ella.)
+  const base = {
+    nombre, direccion, anillo, precio_hora,
+    latitud, longitud, capacidad: cap, disponible: true,
+    usuario_id: req.usuario.id,
+  };
+  const conExtras = {
+    ...base,
+    ancho: anchoNum, largo: largoNum, altura: alturaNum, metros_cuadrados: m2,
+    descripcion: descripcion ? String(descripcion).trim() : null,
+    estado: 'pendiente',
+  };
+
+  let insercion = await supabase.from('garajes').insert([conExtras]).select();
+  if (insercion.error && /ancho|largo|altura|metros_cuadrados|descripcion|estado/.test(insercion.error.message || '')) {
+    insercion = await supabase.from('garajes').insert([base]).select();
+  }
+  const { data, error } = insercion;
   if (error) return res.status(500).json({ error: error.message });
 
   await pub.publish('iot:garaje:creado', JSON.stringify({
@@ -195,6 +246,37 @@ exports.create = async (req, res) => {
   res.status(201).json(data[0]);
 };
 
+// Mis garajes (del dueño autenticado), incluidos los pendientes de aprobación.
+exports.mios = async (req, res) => {
+  const { data, error } = await supabase
+    .from('garajes').select('*').eq('usuario_id', req.usuario.id)
+    .order('id', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(200).json(data);
+};
+
+// --- Aprobación de garajes (solo admin) ---
+exports.pendientes = async (req, res) => {
+  if (req.usuario.rol !== 'admin') return res.status(403).json({ error: 'No autorizado' });
+  const { data, error } = await supabase
+    .from('garajes')
+    .select('*, usuarios(nombre, email)')
+    .eq('estado', 'pendiente')
+    .order('id', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(200).json(data);
+};
+
+exports.revisar = async (req, res) => {
+  if (req.usuario.rol !== 'admin') return res.status(403).json({ error: 'No autorizado' });
+  const nuevoEstado = req.body.aprobar ? 'aprobado' : 'rechazado';
+  const { data, error } = await supabase
+    .from('garajes').update({ estado: nuevoEstado }).eq('id', req.params.id).select();
+  if (error || !data.length) return res.status(404).json({ error: 'Garaje no encontrado' });
+  emitir('actualizacion', { tipo: 'GARAJE_REVISADO', garaje_id: req.params.id });
+  res.status(200).json({ mensaje: `Garaje ${nuevoEstado}`, garaje: data[0] });
+};
+
 exports.update = async (req, res) => {
   const permiso = await garajeDelUsuario(req.params.id, req.usuario);
   if (!permiso.garaje) {
@@ -202,7 +284,7 @@ exports.update = async (req, res) => {
   }
 
   // Solo se permiten actualizar campos conocidos (nunca usuario_id ni id).
-  const permitidos = ['nombre', 'direccion', 'anillo', 'precio_hora', 'latitud', 'longitud', 'capacidad', 'disponible'];
+  const permitidos = ['nombre', 'direccion', 'anillo', 'precio_hora', 'latitud', 'longitud', 'capacidad', 'disponible', 'ancho', 'largo', 'altura', 'metros_cuadrados', 'descripcion'];
   const cambios = {};
   for (const campo of permitidos) {
     if (req.body[campo] !== undefined) cambios[campo] = req.body[campo];

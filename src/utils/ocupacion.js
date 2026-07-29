@@ -9,9 +9,16 @@ function espaciosDe(reserva) {
   return Number(reserva.espacios) > 0 ? Number(reserva.espacios) : 1;
 }
 
+// Estados que retienen espacio: una reserva 'pendiente' (esperando que el
+// dueño la acepte) ya reserva el lugar para que nadie más lo tome, igual que
+// una 'activa'. Las 'cancelada' y 'rechazada' liberan el espacio.
+function reservaRetieneEspacio(reserva) {
+  return reserva.estado === 'activa' || reserva.estado === 'pendiente';
+}
+
 // ¿La reserva ocupa espacio dentro de la ventana [desde, hasta)?
 function reservaOcupaVentana(reserva, desde, hasta) {
-  if (reserva.estado !== 'activa') return false;
+  if (!reservaRetieneEspacio(reserva)) return false;
   if (!reserva.inicio || !reserva.fin) return true; // reserva sin horario
   const inicio = new Date(reserva.inicio);
   const fin = new Date(reserva.fin);

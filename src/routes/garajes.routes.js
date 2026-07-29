@@ -4,11 +4,15 @@ const ctrl = require('../controllers/garajes.controller');
 const autenticar = require('../middlewares/autenticar');
 
 router.get('/', ctrl.getAll);
+router.get('/mios', autenticar, ctrl.mios);
+router.get('/pendientes', autenticar, ctrl.pendientes);
+router.put('/:id/revisar', autenticar, ctrl.revisar);
 router.get('/:id', ctrl.getById);
 router.get('/:id/calificaciones', ctrl.calificaciones);
 router.post('/', autenticar, ctrl.create);
 router.post('/:id/calificar', autenticar, ctrl.calificar);
 router.post('/:id/fotos', autenticar, ctrl.subirFoto);
+router.post('/:id/documento', autenticar, ctrl.subirDocumento);
 router.put('/:id', autenticar, ctrl.update);
 router.delete('/:id', autenticar, ctrl.remove);
 
