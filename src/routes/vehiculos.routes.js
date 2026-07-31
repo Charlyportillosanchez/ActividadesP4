@@ -6,6 +6,7 @@ const autenticar = require('../middlewares/autenticar');
 router.get('/', autenticar, ctrl.mios);
 router.post('/', autenticar, ctrl.crear);
 router.post('/:id/documento', autenticar, ctrl.subirDocumento);
+router.post('/:id/foto', autenticar, ctrl.subirFoto);
 router.get('/pendientes', autenticar, ctrl.pendientes);
 router.put('/:id/revisar', autenticar, ctrl.revisar);
 router.delete('/:id', autenticar, ctrl.eliminar);

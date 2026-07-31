@@ -110,6 +110,26 @@ exports.subirDocumento = async (req, res) => {
   res.status(201).json({ mensaje: 'Documento subido', url: subida.url });
 };
 
+// Subir la FOTO del vehículo (la que ve el dueño del garaje al reservar).
+exports.subirFoto = async (req, res) => {
+  const { data: veh } = await supabase
+    .from('vehiculos').select('usuario_id').eq('id', req.params.id).single();
+  if (!veh) return res.status(404).json({ error: 'Vehículo no encontrado' });
+  if (veh.usuario_id !== req.usuario.id) {
+    return res.status(403).json({ error: 'Ese vehículo no es tuyo' });
+  }
+
+  const subida = await subirImagen('documentos',
+    `vehiculo_${req.params.id}_foto`, req.body.imagen, req.body.extension);
+  if (subida.error) return res.status(400).json({ error: subida.error });
+
+  const { error } = await supabase
+    .from('vehiculos').update({ foto_url: subida.url }).eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+
+  res.status(201).json({ mensaje: 'Foto subida', url: subida.url });
+};
+
 // Eliminar un vehículo propio.
 exports.eliminar = async (req, res) => {
   const { data: veh } = await supabase
