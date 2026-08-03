@@ -89,6 +89,22 @@ setIO(io);
 
 io.on('connection', (socket) => {
   console.log(`[Socket] Cliente conectado: ${socket.id}`);
+
+  // Rastreo en vivo: el cliente que va en camino envía su ubicación y el
+  // servidor la retransmite a quien esté rastreando esa reserva (el dueño).
+  socket.on('ubicacion', (data) => {
+    if (data && data.reservaId != null) {
+      io.emit('ubicacion', data);
+    }
+  });
+
+  // El cliente avisa que dejó de compartir (llegó o canceló).
+  socket.on('fin_ubicacion', (data) => {
+    if (data && data.reservaId != null) {
+      io.emit('fin_ubicacion', data);
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log(`[Socket] Cliente desconectado: ${socket.id}`);
   });
