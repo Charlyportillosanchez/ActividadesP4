@@ -16,10 +16,12 @@ const app = express();
 // Seguridad con Helmet
 app.use(helmet());
 
-// Rate Limiting - 100 peticiones por 15 minutos
+// Rate Limiting - 2000 peticiones por 15 minutos.
+// La app consulta datos con frecuencia (mapa, garajes, reservas, vehículos),
+// por eso el límite es amplio para no frenar el uso normal.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 2000,
   message: { error: 'Demasiadas peticiones, intenta en 15 minutos' },
   standardHeaders: true,
   legacyHeaders: false,
